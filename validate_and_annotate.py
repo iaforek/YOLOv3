@@ -73,8 +73,8 @@ def infer_one(img_path, model, num_classes=NUM_CLASSES, conf_thres=0.25, iou_thr
 
     # debug
     p = preds_flat[0]
-    obj = p[:, 0].sigmoid()
-    cls_prob, cls_idx = p[:, 5:].sigmoid().max(dim=1)
+    obj = p[:, 0]
+    cls_prob, cls_idx = p[:, 5:].max(dim=1)
     conf = (obj * cls_prob)
     print("max obj:", float(obj.max()))
     print("max cls_prob:", float(cls_prob.max()))
@@ -92,7 +92,7 @@ def infer_one(img_path, model, num_classes=NUM_CLASSES, conf_thres=0.25, iou_thr
           (scores[0].max().item() if scores[0].numel() else 0.0))
     print("Top-5 objectness (pre-filter) snapshot:")
     with torch.no_grad():
-        obj5 = preds_flat[0, :, 0].sigmoid()
+        obj5 = preds_flat[0, :, 0]
         topk = torch.topk(obj5, k=min(5, obj5.numel())).values.cpu().numpy()
         print(topk)
 
@@ -126,11 +126,12 @@ if __name__ == "__main__":
 
     # --- build model & load weights ---
     model = YOLOv3(input_channels=3, anchors=anchors, n_classes=NUM_CLASSES)
-    ckpt = "yolov3_scratch_voc.pth"   # from your training
+    # ckpt = "yolov3_scratch_voc.pth"   # from your training
+    ckpt = "ckpt_voc_epoch_20.pth"
     model.load_state_dict(torch.load(ckpt, map_location="cpu"))
     model.to("cuda" if torch.cuda.is_available() else "cpu")
 
     # --- run on one image ---
     # 000000000113.jpg shows two persons cutting a cake.
     infer_one("/mnt/scratch2/users/40464858/coco128/images/train2017/000000000113.jpg", model, num_classes=NUM_CLASSES,
-              conf_thres=0.05, iou_thres=0.50, out_path="pred_vis.jpg")
+              conf_thres=0.05, iou_thres=0.50, out_path="pred_vis_9_july_2026.jpg")
