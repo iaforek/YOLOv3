@@ -6,9 +6,11 @@ from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 import torch.nn.functional as F
 import torch.optim as optim
+import time
 
 ROOT = "/mnt/scratch2/users/40464858/VOC_dataset/voc_yolo"
-IMG, BATCH, EPOCHS, NUM_CLASSES = 416, 8, 100, 20
+IMG, BATCH, EPOCHS, NUM_CLASSES = 416, 32, 100, 20
+LEARNING_RATE = 1e-3
 
 class YoloTxtDataset(Dataset):
     def __init__(self, root=ROOT, split="train", img_size=IMG):
@@ -167,11 +169,17 @@ def yolo_head_loss(pred, tgt, lambda_obj=1.0, lambda_cls=1.0, lambda_box=5.0):
     return lambda_obj*l_obj + lambda_cls*l_cls + lambda_box*l_box
 
 def train():
+    torch.backends.cudnn.benchmark = True
+
+    print("Torch:", torch.__version__)
+    print("CUDA available:", torch.cuda.is_available())
+    print("CUDA build:", torch.version.cuda)
+    if torch.cuda.is_available():
+        print("GPU:", torch.cuda.get_device_name(0))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Using device:", device)
 
     ds = YoloTxtDataset(root=ROOT, split="train", img_size=IMG)
-    dl = DataLoader(ds, batch_size=BATCH, shuffle=True, collate_fn=collate_fn, num_workers=2, pin_memory=True)
+    dl = DataLoader(ds, batch_size=BATCH, shuffle=True, collate_fn=collate_fn, num_workers=4, pin_memory=True, persistent_workers=True, prefetch_factor=4)
 
     print("Collecting GT boxes for KMeans...")
     gt_boxes_np = collect_gt_boxes_np(ROOT, img_size=IMG, split="train")
@@ -182,7 +190,7 @@ def train():
     anchors_grid = anchors_pixels_to_grid(centers_px)
 
     model = YOLOv3(input_channels=3, anchors=anchors_grid, n_classes=NUM_CLASSES).to(device)
-    opt = optim.AdamW(model.parameters(), lr=1e-3)
+    opt = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     anc_sm = anchors_grid[0:3].to(device)
     anc_md = anchors_grid[3:6].to(device)
@@ -190,6 +198,7 @@ def train():
 
     print("Starting training...")
     for epoch in range(EPOCHS):
+        start = time.time()
         model.train()
         total = 0.0
         for images, targets in dl:
@@ -222,7 +231,11 @@ def train():
 
             opt.step()
             total += loss.item()
-        print(f"Epoch {epoch+1}/{EPOCHS}  loss={total/len(dl):.4f}")
+
+        # Print epoch summary
+        dt = time.time() - start
+        imgs_per_sec = len(ds) / dt
+        print(f"Epoch {epoch+1}/{EPOCHS} loss={total/len(dl):.4f} time={dt:.1f}s speed={imgs_per_sec:.1f} img/s")
 
         # Periodic checkpoint
         if (epoch + 1) % 10 == 0:

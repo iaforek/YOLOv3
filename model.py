@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import torchvision
 import torch.nn as nn
-import torchvision.models as tv_models
 from torchvision.models.resnet import ResNet, BasicBlock
 import os; os.environ["OMP_NUM_THREADS"] = "4" # Windows MKL KMeans warning
 from sklearn.cluster import KMeans
@@ -16,7 +15,7 @@ class KMeansAnchors:
         """
         self.boxes = boxes
         self.n_anchors = n_anchors
-        self.km = KMeans(n_clusters=n_anchors, n_init=n_init, max_iter=max_iter)
+        self.km = KMeans(n_clusters=n_anchors, n_init=n_init, max_iter=max_iter, random_state=0)
 
     def get_wh(self) -> np.ndarray:
         """Return (N,2) array of widths and heights."""
