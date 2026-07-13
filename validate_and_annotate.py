@@ -60,19 +60,19 @@ def infer_one(img_path, model, num_classes=NUM_CLASSES, conf_thres=0.25, iou_thr
 
     # BGR->RGB safely (no negative strides)
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    x = torch.from_numpy(img_rgb.transpose(2,0,1).copy()).float().unsqueeze(0) / 255.0
-    x = x.to(device)
+    input_image_batch = torch.from_numpy(img_rgb.transpose(2,0,1).copy()).float().unsqueeze(0) / 255.0
+    input_image_batch = input_image_batch.to(device)
 
     model.eval()
     with torch.no_grad():
-        preds_flat = model(x)  # (1, total, 5+C)
+        all_candidate_predictions = model(input_image_batch)  # (1, total, 5+C)
 
     # split heads and scale to pixels
-    lg, md, sm = split_heads_to_grid(preds_flat, num_classes=NUM_CLASSES, A=3)
+    lg, md, sm = split_heads_to_grid(all_candidate_predictions, num_classes=NUM_CLASSES, A=3)
     preds_px = heads_to_pixels(lg, md, sm, strides=(32,16,8))  # (1, total, 5+C) cxcywh in pixels
 
     # debug
-    p = preds_flat[0]
+    p = all_candidate_predictions[0]
     obj = p[:, 0]
     cls_prob, cls_idx = p[:, 5:].max(dim=1)
     conf = (obj * cls_prob)
@@ -92,7 +92,7 @@ def infer_one(img_path, model, num_classes=NUM_CLASSES, conf_thres=0.25, iou_thr
           (scores[0].max().item() if scores[0].numel() else 0.0))
     print("Top-5 objectness (pre-filter) snapshot:")
     with torch.no_grad():
-        obj5 = preds_flat[0, :, 0]
+        obj5 = all_candidate_predictions[0, :, 0]
         topk = torch.topk(obj5, k=min(5, obj5.numel())).values.cpu().numpy()
         print(topk)
 
@@ -126,12 +126,11 @@ if __name__ == "__main__":
 
     # --- build model & load weights ---
     model = YOLOv3(input_channels=3, anchors=anchors, n_classes=NUM_CLASSES)
-    # ckpt = "yolov3_scratch_voc.pth"   # from your training
-    ckpt = "ckpt_voc_epoch_20.pth"
-    model.load_state_dict(torch.load(ckpt, map_location="cpu"))
+    checkpoint = "yolov3_scratch_voc.pth"
+    model.load_state_dict(torch.load(checkpoint, map_location="cpu"))
     model.to("cuda" if torch.cuda.is_available() else "cpu")
 
     # --- run on one image ---
     # 000000000113.jpg shows two persons cutting a cake.
     infer_one("/mnt/scratch2/users/40464858/coco128/images/train2017/000000000113.jpg", model, num_classes=NUM_CLASSES,
-              conf_thres=0.05, iou_thres=0.50, out_path="pred_vis_9_july_2026.jpg")
+              conf_thres=0.05, iou_thres=0.50, out_path="pred_vis_full_training.jpg")
