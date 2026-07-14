@@ -1,8 +1,9 @@
-*** YOLOv3 Style Object Detector From Scratch
+### YOLOv3 Style Object Detector From Scratch
 
 This project is a complete YOLOv3 style object detector created from scratch.
+It uses modified ResNet18 instead of DarkNet53 network.
 
-*** How To Configure And Run?
+### How To Configure And Run?
 
 1. Clone this repository.
 2. Create an Anaconda Environment (optional, recommended).
