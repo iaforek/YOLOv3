@@ -1,13 +1,17 @@
-import os, glob
-from model import KMeansAnchors, YOLOv3
-import numpy as np
-import torch
-from torch.utils.data import Dataset, DataLoader
-from PIL import Image
-import torch.nn.functional as F
-import torch.optim as optim
+import glob
+import os
 import time
 
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset
+
+from model import KMeansAnchors, YOLOv3
+
+# Path to VOC dataset
 ROOT = "/mnt/scratch2/users/40464858/VOC_dataset/voc_yolo"
 IMG, BATCH, EPOCHS, NUM_CLASSES = 416, 32, 100, 20
 LEARNING_RATE = 1e-3
@@ -19,7 +23,8 @@ class YoloTxtDataset(Dataset):
         self.img_size = img_size
         self.img_paths = sorted(glob.glob(os.path.join(self.img_dir, "*.jpg")))
 
-    def __len__(self): return len(self.img_paths)
+    def __len__(self):
+        return len(self.img_paths)
 
     def _label_path(self, img_path):
         base = os.path.splitext(os.path.basename(img_path))[0] + ".txt"
@@ -46,17 +51,17 @@ class YoloTxtDataset(Dataset):
     def __getitem__(self, i):
         p = self.img_paths[i]
         img = Image.open(p).convert("RGB")
-        W, H = img.size
-        labels = self._read_labels(self._label_path(p), W, H)   # (N,5) [cls, x, y, w, h] in px
+        width, height = img.size
+        labels = self._read_labels(self._label_path(p), width, height)   # (N,5) [cls, x, y, w, h] in px
 
         # simple square resize
-        IMG = self.img_size
-        img = img.resize((IMG, IMG))
-        sx, sy = IMG/W, IMG/H
+        img_size = self.img_size
+        img = img.resize((img_size, img_size))
+        sx, sy = img_size/width, img_size/height
         if labels.size:
-            labels[:,1] *= sx; 
+            labels[:,1] *= sx
             labels[:,2] *= sy
-            labels[:,3] *= sx; 
+            labels[:,3] *= sx
             labels[:,4] *= sy
 
         x = torch.from_numpy(np.array(img)).permute(2,0,1).float()/255.0
@@ -99,19 +104,21 @@ def anchors_pixels_to_grid(centers_px):
 
 # --- (very) simple per-head target & loss (starter) ---
 def iou_wh(box_wh, anc_wh):
-    b = box_wh[:,None,:]; a = anc_wh[None,:,:]
+    b = box_wh[:,None,:]
+    a = anc_wh[None,:,:]
     inter = torch.min(b, a).prod(-1)
-    area_b = b[...,0]*b[...,1]; area_a = a[...,0]*a[...,1]
+    area_b = b[...,0]*b[...,1]
+    area_a = a[...,0]*a[...,1]
     return inter / (area_b + area_a - inter + 1e-9)
 
 def build_targets_dense(targets_px, batch_size, imgsz=IMG, strides=(8,16,32), anchors_per_scale=None, num_classes=NUM_CLASSES, device="cpu"):
-    B = int(batch_size)
+    batch_size = int(batch_size)
     outs = []
     for s, anc in zip(strides, anchors_per_scale):
-        H = W = imgsz // s
-        obj  = torch.zeros((B,H,W,anc.shape[0],1), device=device)
-        cls  = torch.zeros((B,H,W,anc.shape[0],num_classes), device=device)
-        xywh = torch.zeros((B,H,W,anc.shape[0],4), device=device)
+        height = width = imgsz // s
+        obj  = torch.zeros((batch_size,height,width,anc.shape[0],1), device=device)
+        cls  = torch.zeros((batch_size,height,width,anc.shape[0],num_classes), device=device)
+        xywh = torch.zeros((batch_size,height,width,anc.shape[0],4), device=device)
 
         if targets_px.numel():
             t = targets_px.to(device)  # (M,6)
@@ -119,7 +126,7 @@ def build_targets_dense(targets_px, batch_size, imgsz=IMG, strides=(8,16,32), an
             # Grid coordinates
             gx, gy = x/s, y/s
             gw, gh = w/s, h/s
-            gi, gj = gx.long().clamp(0, W-1), gy.long().clamp(0, H-1)
+            gi, gj = gx.long().clamp(0, width-1), gy.long().clamp(0, height-1)
             ious = iou_wh(torch.stack([gw,gh], dim=1), anc.to(device))
             best_a = ious.argmax(1)
             for n in range(t.shape[0]):
@@ -128,7 +135,7 @@ def build_targets_dense(targets_px, batch_size, imgsz=IMG, strides=(8,16,32), an
                 ci = int(c[n].item())
                 i = int(gi[n].item())
                 j = int(gj[n].item())
-                
+
                 obj[bi,j,i,ai,0]  = 1.0
                 cls[bi,j,i,ai,ci] = 1.0
                 xywh[bi,j,i,ai,:] = torch.tensor([gx[n], gy[n], gw[n], gh[n]], device=device)
@@ -136,19 +143,23 @@ def build_targets_dense(targets_px, batch_size, imgsz=IMG, strides=(8,16,32), an
         outs.append(dict(obj=obj, cls=cls, xywh=xywh))
     return outs
 
-def split_heads_to_grid(pred_flat, img_size=IMG, A=3, num_classes=NUM_CLASSES):
-    B = pred_flat.shape[0]
-    C = 5 + num_classes
-    n_lg = 13 * 13 * A
-    n_md = 26 * 26 * A
-    lg = pred_flat[:, :n_lg, :].reshape(B,13,13,A,C)
-    md = pred_flat[:, n_lg:n_lg+n_md, :].reshape(B,26,26,A,C)
-    sm = pred_flat[:, n_lg+n_md:, :].reshape(B,52,52,A,C)
+def split_heads_to_grid(pred_flat, anchors=3, num_classes=NUM_CLASSES):
+    batch_size = pred_flat.shape[0]
+    classes = 5 + num_classes
+    n_lg = 13 * 13 * anchors
+    n_md = 26 * 26 * anchors
+    lg = pred_flat[:, :n_lg, :].reshape(batch_size,13,13,anchors,classes)
+    md = pred_flat[:, n_lg:n_lg+n_md, :].reshape(batch_size,26,26,anchors,classes)
+    sm = pred_flat[:, n_lg+n_md:, :].reshape(batch_size,52,52,anchors,classes)
     return lg, md, sm
 
 def yolo_head_loss(pred, tgt, lambda_obj=1.0, lambda_cls=1.0, lambda_box=5.0):
-    obj_p = pred[...,0:1]; xywh_p = pred[...,1:5]; cls_p = pred[...,5:]
-    obj_t = tgt["obj"];    xywh_t = tgt["xywh"];    cls_t = tgt["cls"]
+    obj_p = pred[...,0:1]
+    xywh_p = pred[...,1:5]
+    cls_p = pred[...,5:]
+    obj_t = tgt["obj"]
+    xywh_t = tgt["xywh"]
+    cls_t = tgt["cls"]
 
     # Sanity checks to prevent CUDA device-side asserts
     assert torch.isfinite(obj_t).all(), "obj_t has NaN/Inf"
@@ -165,7 +176,8 @@ def yolo_head_loss(pred, tgt, lambda_obj=1.0, lambda_cls=1.0, lambda_box=5.0):
         l_cls = F.binary_cross_entropy(cls_p[pos.expand_as(cls_p)], cls_t[pos.expand_as(cls_t)], reduction="mean")
         l_box = F.smooth_l1_loss(xywh_p[pos.expand_as(xywh_p)], xywh_t[pos.expand_as(xywh_t)], reduction="mean")
     else:
-        l_cls = torch.tensor(0.0, device=pred.device); l_box = torch.tensor(0.0, device=pred.device)
+        l_cls = torch.tensor(0.0, device=pred.device)
+        l_box = torch.tensor(0.0, device=pred.device)
     return lambda_obj*l_obj + lambda_cls*l_cls + lambda_box*l_box
 
 def train():
@@ -210,22 +222,22 @@ def train():
                 classes = int(targets[:, 1].max().item())
                 assert 0 <= classes < NUM_CLASSES, f"Class id {classes} out of range"
 
-            tgts = build_targets_dense(targets, 
+            tgts = build_targets_dense(targets,
                                        imgsz=IMG,
                                        batch_size=images.shape[0],
                                        strides=(8,16,32),
                                        anchors_per_scale=(anc_sm, anc_md, anc_lg),
-                                       num_classes=NUM_CLASSES, 
+                                       num_classes=NUM_CLASSES,
                                        device=device)
 
             preds = model(images)  # (B, 10647, 5+NUM_CLASSES)
-            lg, md, sm = split_heads_to_grid(preds, img_size=IMG, A=3, num_classes=NUM_CLASSES)
+            lg, md, sm = split_heads_to_grid(preds, anchors=3, num_classes=NUM_CLASSES)
 
             loss = yolo_head_loss(lg, tgts[2]) + yolo_head_loss(md, tgts[1]) + yolo_head_loss(sm, tgts[0])
 
-            opt.zero_grad(); 
-            loss.backward(); 
-            
+            opt.zero_grad()
+            loss.backward()
+
             # Gradient clipping for stability
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
 
