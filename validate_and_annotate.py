@@ -1,6 +1,9 @@
+import cv2
+import numpy as np
+import torch
+
 from model import BoundingBoxPostProcessing, KMeansAnchors, YOLOv3
 from train import collect_gt_boxes_np
-import cv2, torch, numpy as np
 
 # --- COCO class names (80) ---
 COCO_NAMES = [
@@ -83,7 +86,7 @@ def infer_one(img_path, model, num_classes=NUM_CLASSES, conf_thres=0.25, iou_thr
     # post-process
     print("Using conf_thres =", conf_thres)
     pp = BoundingBoxPostProcessing(preds_px, box_format="cxcywh")
-    scores, boxes, classes = pp.filter_boxes(scoreThresh=conf_thres)
+    scores, boxes, classes = pp.filter_boxes(score_threshold=conf_thres)
     scores, boxes, classes = pp.non_max_suppression(scores, boxes, classes, iou_threshold=iou_thres)
 
     # debug
