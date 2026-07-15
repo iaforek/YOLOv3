@@ -1,9 +1,11 @@
 import cv2
+import datetime
 import numpy as np
 import torch
 
 from model import BoundingBoxPostProcessing, KMeansAnchors, YOLOv3
 from train import collect_gt_boxes_np
+from pathlib import Path
 
 # --- COCO class names (80) ---
 COCO_NAMES = [
@@ -53,6 +55,7 @@ def heads_to_pixels(lg, md, sm, strides=(32,16,8)):
 
 # --- single-image inference ---
 def infer_one(img_path, model, num_classes=NUM_CLASSES, conf_thres=0.25, iou_thres=0.5, out_path="pred_vis.jpg"):
+    print(f"Running inference on {img_path} at {datetime.datetime.now()}")
     device = next(model.parameters()).device
 
     img0 = cv2.imread(img_path)
@@ -120,8 +123,31 @@ def infer_one(img_path, model, num_classes=NUM_CLASSES, conf_thres=0.25, iou_thr
     print(f"Saved → {out_path}")
 
 if __name__ == "__main__":
+    print(f"Running inference on a single image with YOLOv3... at {datetime.datetime.now()}")
     # --- rebuild anchors exactly like in training (or load the same ones you used) ---
-    anchors_px = KMeansAnchors(collect_gt_boxes_np(ROOT, IMG, "train"), n_anchors=9).get_anchors()
+    anchor_file = Path(ROOT) / f"anchors_{IMG}_train.npy"
+
+    if anchor_file.exists():
+        anchors_px = np.load(anchor_file)
+        print(f"Loaded anchors from {anchor_file}")
+    else:
+        print("Calculating anchors...")
+
+        gt_boxes_np = collect_gt_boxes_np(
+            ROOT,
+            img_size=IMG,
+            split="train",
+        )
+
+        anchors_px = KMeansAnchors(
+            gt_boxes_np,
+            n_anchors=9,
+        ).get_anchors()
+
+        np.save(anchor_file, anchors_px)
+        print(f"Saved anchors to {anchor_file}")
+
+    print("Anchors (px):", anchors_px)
     anchors = torch.tensor(anchors_px, dtype=torch.float32)
     anchors[:3]  /= 8.0
     anchors[3:6] /= 16.0
